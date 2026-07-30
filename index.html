@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>중산현대아파트 · 불량내역 입력</title>
+<script src="https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <style>
   :root{
     --accent:#1f6feb;
@@ -17,7 +19,7 @@
     --muted:#8a8f98;
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic",Pretendard,sans-serif;font-size:15px;padding-bottom:90px;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic",Pretendard,sans-serif;font-size:15px;padding-bottom:150px;}
   header{position:sticky;top:0;z-index:20;background:var(--accent);color:#fff;padding:10px 14px;display:flex;align-items:center;gap:10px;box-shadow:0 2px 6px rgba(0,0,0,.15);}
   header .title{font-weight:800;font-size:15px;flex:1;line-height:1.3;}
   header .back{font-size:20px;cursor:pointer;padding:2px 8px;}
@@ -61,8 +63,9 @@
     width:100%;padding:11px;border:1.5px solid var(--border);border-radius:10px;font-size:15px;background:#fff;color:var(--text);font-family:inherit;
   }
   textarea{min-height:60px;resize:vertical;}
-  .footerbar{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--border);padding:10px 14px;display:flex;gap:8px;z-index:20;}
-  .footerbar button{flex:1;border:none;border-radius:10px;padding:12px 4px;font-weight:800;font-size:13px;cursor:pointer;}
+  .footerbar{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--border);padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap;z-index:20;}
+  .footerbar > button{flex:1;min-width:70px;}
+  .footerbar button{flex:1;border:none;border-radius:10px;padding:12px 2px;font-weight:800;font-size:11.5px;cursor:pointer;}
   .btn-primary{background:var(--accent);color:#fff;}
   .btn-secondary{background:#eef1f5;color:#333;}
   .btn-danger{background:#fdeceb;color:var(--danger);}
@@ -100,18 +103,22 @@
 <header>
   <span class="back" id="backBtn" style="visibility:hidden;">←</span>
   <span class="title" id="headerTitle">중산현대아파트 · 불량내역</span>
+  <span class="badge" id="syncBadge" style="margin-right:4px;">🟡 연결 확인 중</span>
   <span class="badge" id="headerBadge"></span>
 </header>
 
 <main id="main"></main>
 
 <div class="footerbar" id="footerHome">
+  <button class="btn-primary" id="backToFisBtn" style="background:#3ab54a;flex-basis:100%;">✅ 동기화 후 현장테스트 화면으로 돌아가기</button>
   <button class="btn-secondary" id="saveNowBtn">💾 저장</button>
   <button class="btn-secondary" id="settingsBtn">⚙ 설정</button>
-  <button class="btn-primary" id="exportBtn">⬇ CSV</button>
+  <button class="btn-secondary" id="resyncBtn">☁ 재동기화</button>
+  <button class="btn-secondary" id="pptReportBtn">📊 PPT</button>
+  <button class="btn-primary" id="exportBtn">🧾 정식엑셀</button>
   <button class="btn-primary" id="shareBtn" style="background:#3ab54a;">📤 공유</button>
 </div>
-<div id="saveStatusBar" style="position:fixed;bottom:64px;left:0;right:0;text-align:center;font-size:11px;color:var(--muted);z-index:19;pointer-events:none;"></div>
+<div id="saveStatusBar" style="position:fixed;bottom:118px;left:0;right:0;text-align:center;font-size:11px;color:var(--muted);z-index:19;pointer-events:none;"></div>
 
 <div class="toast" id="toast"></div>
 
@@ -261,6 +268,15 @@
 </div>
 
 <script>
+// [진단용] 자바스크립트 오류가 나면 화면 맨 위에 빨간 띠로 바로 보이게 한다 (조용히 하얗게 멈추는 것 방지)
+window.onerror = function(msg, url, line, col, err){
+  var d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;background:#d64545;color:#fff;padding:10px;font-size:12px;white-space:pre-wrap;';
+  d.textContent = '⚠ 오류: ' + msg + ' (줄 ' + line + ')';
+  document.documentElement.appendChild(d);
+};
+</script>
+<script>
 (function(){
 "use strict";
 
@@ -359,6 +375,81 @@ var STORAGE_KEY = 'jsh_apt_defect_v1';
 var saveTimer = null;
 var lastSaveOk = true;
 
+// ================= [V08 신규] 팀 공유 저장소(구글) 연동 =================
+// "혁신소방_현장테스트"(FIS) 화면과 완전히 같은 백엔드(같은 구글시트)를 써서, 여기서 세대별로
+// 저장한 불량내역이 FIS의 "불량내역 입력" 화면 목록에도 그대로 나타나게 한다(엑셀출력/JSON백업도
+// FIS 쪽 기존 메뉴를 그대로 쓸 수 있음). 4명이 각자 다른 기기에서 저장해도 전부 이 한 저장소로 모인다.
+var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwM0P12cGqIMO3GeuRX5A9gjIzUxVD_n9PPNiZ5YD0gT0JE4set7ADKdwHzgBr7dKqn/exec';
+var backendOnline = null;
+function updateSyncBadge(){
+  var el = document.getElementById('syncBadge');
+  if(!el) return;
+  if(backendOnline === true){ el.textContent = '🟢 팀 공유 연결됨'; el.style.background = 'rgba(46,158,91,.9)'; }
+  else if(backendOnline === false){ el.textContent = '🔴 공유 연결 실패'; el.style.background = 'rgba(229,72,77,.9)'; }
+  else { el.textContent = '🟡 연결 확인 중'; el.style.background = 'rgba(255,255,255,.22)'; }
+}
+async function callAppsScript(payload){
+  try{
+    var res = await fetch(APPS_SCRIPT_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(payload) });
+    var data = await res.json();
+    backendOnline = true; updateSyncBadge();
+    return data;
+  }catch(err){
+    console.error('공유 저장소 연결 실패', err);
+    backendOnline = false; updateSyncBadge();
+    return null;
+  }
+}
+async function storageSetShared(key, value){
+  return callAppsScript({ action:'set', key:key, value:value, shared:true });
+}
+// FIS(혁신소방_현장테스트)의 "불량내역 입력" 화면이 쓰는 것과 똑같은 스키마(entry 필드명)로 변환해서
+// 'defect:' 접두어로 저장한다 — 이래야 그쪽 화면의 defectEntries 목록에 자동으로 섞여 들어간다.
+// id 앞에 'apt_'를 붙여서 FIS 쪽에서 직접 만든 id와 절대 겹치지 않게 한다.
+function mapEntryToFisDefect(e){
+  var location = e.dong + (e.lineGroup ? ' '+e.lineGroup+'라인' : '');
+  var raw = e.defectContent || '';
+  // [기존 export 로직과 동일한 중복방지] locationDetail이 이미 defectContent 맨 앞에 들어있으면 또 안 붙인다.
+  var content = (e.locationDetail && raw.indexOf(e.locationDetail) === 0) ? raw : ((e.locationDetail ? e.locationDetail+' ' : '') + raw);
+  return {
+    id: 'apt_' + e.id,
+    building: state.currentBuilding,
+    inspector: e.inspector || state.inspector || '',
+    location: location,
+    detailLocation: '', // 층/계단참 등 세부위치는 이미 위 content 앞부분에 포함돼 있어 중복 표시 방지차 비워둠
+    equip: e.equip || '',
+    defectContent: content,
+    parentEquip: null,
+    action: e.action || '',
+    photo: e.photo || null,
+    inspectionType: null,
+    inspectionDate: e.date || state.date,
+    inspectionId: null,
+    ts: e.ts || Date.now(),
+    _fromApt: true, // FIS 쪽에서 "세대별 점검 앱에서 온 항목"임을 구분하고 싶을 때 참고용
+  };
+}
+var syncedIds = {}; // 이번 세션에서 이미 동기화 성공한 e.id들(중복 재전송 방지용 캐시. 새로고침하면 초기화되지만 storageSet은 덮어쓰기라 안전함)
+async function syncEntryToFis(e){
+  if(e.status !== 'defect') return; // 정상확인/부재중은 FIS 쪽 불량내역에 넣을 필요 없음
+  var mapped = mapEntryToFisDefect(e);
+  var res = await storageSetShared('defect:'+mapped.id, JSON.stringify(mapped));
+  if(res) syncedIds[e.id] = true;
+  return res;
+}
+// 아직 동기화 안 된(또는 실패한) 불량 항목들을 한 번에 다시 밀어넣는다 — 저장 당시 오프라인이었거나
+// 실패한 경우를 위한 재시도 버튼에서 사용.
+async function syncAllPending(){
+  var defects = activeEntries().filter(function(e){ return e.status==='defect'; });
+  var pending = defects.filter(function(e){ return !syncedIds[e.id]; });
+  var ok = 0, fail = 0;
+  for(var i=0;i<pending.length;i++){
+    var res = await syncEntryToFis(pending[i]);
+    if(res) ok++; else fail++;
+  }
+  return { total: pending.length, ok: ok, fail: fail, alreadyDone: defects.length - pending.length };
+}
+
 function markDirty(){
   state.dirty = true;
   scheduleAutoSave();
@@ -384,13 +475,39 @@ function updateSaveStatus(msg){
   var bar = document.getElementById('saveStatusBar');
   if(bar) bar.textContent = msg;
 }
+// [V07 후속수정] V05/V06 시절(단일 대상물, state.lineGroups/maxFloor 등이 최상위에 있던 구조)에
+// 저장된 데이터를 그대로 불러오면 state.buildings/currentBuilding이 없어 화면이 하얗게 멈추는 문제가
+// 있었다. 예전 구조가 감지되면 자동으로 "중산현대아파트" 밑으로 옮겨 담아 데이터 유실 없이 이어쓰게 한다.
+function migrateStateShape(s){
+  if(!s || typeof s !== 'object') return JSON.parse(JSON.stringify({buildings:DEFAULT_BUILDINGS, currentBuilding:'중산현대아파트', inspectorNames:DEFAULT_INSPECTORS.slice(), inspector:'', date:'2026-07-29', entries:[], dirty:false}));
+  if(s.buildings && s.currentBuilding) return s; // 이미 새 구조
+  var migrated = {
+    buildings: JSON.parse(JSON.stringify(DEFAULT_BUILDINGS)),
+    currentBuilding: '중산현대아파트',
+    inspectorNames: s.inspectorNames || DEFAULT_INSPECTORS.slice(),
+    inspector: s.inspector || '',
+    date: s.date || '2026-07-29',
+    entries: s.entries || [],
+    dirty: false
+  };
+  if(s.lineGroups){
+    migrated.buildings['중산현대아파트'] = {
+      dongs: Object.keys(s.lineGroups),
+      lineGroups: s.lineGroups,
+      maxFloor: s.maxFloor || migrated.buildings['중산현대아파트'].maxFloor,
+      lineMaxFloor: s.lineMaxFloor || migrated.buildings['중산현대아파트'].lineMaxFloor,
+      commonPlaces: s.commonPlaces || migrated.buildings['중산현대아파트'].commonPlaces
+    };
+  }
+  return migrated;
+}
 function loadSaved(){
   try{
     var raw = localStorage.getItem(STORAGE_KEY);
     if(!raw) return false;
     var parsed = JSON.parse(raw);
     if(parsed && parsed.state){
-      state = parsed.state;
+      state = migrateStateShape(parsed.state);
       state.dirty = false;
       return true;
     }
@@ -1012,20 +1129,23 @@ document.getElementById('defectSaveBtn').onclick = function(){
     editingEntry.photo = currentPhoto;
     editingEntry.status = 'defect';
     markDirty();
+    syncEntryToFis(editingEntry); // [V08] 수정한 내용도 팀 공유 저장소로 다시 반영(백그라운드, 화면전환 안 기다림)
     toast('수정 완료');
     history.back();
     return;
   }
 
-  state.entries.push({
+  var newEntry = {
     id: 'e'+Date.now()+Math.random().toString(36).slice(2,6),
     dong: pendingLocation.dong, lineGroup: pendingLocation.lineGroup, floor: pendingLocation.floor,
     zone: pendingLocation.zone, unit: pendingLocation.unit, locationDetail: pendingLocation.locationDetail,
     status: 'defect', category: bigCat, equip: currentEquip, code: code,
     defectContent: content, action: $actionSelect.value, memo: $memoInput.value.trim(),
     photo: currentPhoto, trashed:false, inspector: state.inspector, date: state.date, ts: Date.now()
-  });
+  };
+  state.entries.push(newEntry);
   markDirty();
+  syncEntryToFis(newEntry); // [V08] 저장 즉시 팀 공유 저장소(FIS와 동일 백엔드)로도 전송 — 백그라운드로 진행
   toast('불량 저장됨');
   history.back();
 };
@@ -1223,6 +1343,32 @@ function renderStartChips(){
   });
 }
 var restored = loadSaved();
+// [V08] FIS(혁신소방_현장테스트)에서 "세대별 점검 앱 열기"로 넘어올 때 ?building=대상물명 을 붙여주면
+// loadSaved()로 복원된 상태보다 이 값을 우선해서 대상물을 자동 선택한다.
+(function applyBuildingFromUrl(){
+  var name = new URLSearchParams(location.search).get('building');
+  if(name){ state.currentBuilding = name; }
+})();
+// [V08] 재동기화 — 저장 당시 오프라인이었거나 실패했던 불량 항목들을 다시 밀어넣는다.
+document.getElementById('resyncBtn').onclick = async function(){
+  toast('동기화 중...');
+  var r = await syncAllPending();
+  if(r.total === 0) toast('이미 전부 동기화된 상태입니다 (' + r.alreadyDone + '건)');
+  else toast('동기화 완료: 성공 ' + r.ok + '건' + (r.fail? ', 실패 ' + r.fail + '건' : ''));
+};
+// [V08] 세대별 점검을 마치고 이 버튼을 누르면: 로컬 저장 → 아직 안 보낸 불량항목 전부 동기화 →
+// 혁신소방_현장테스트(FIS) 쪽 "불량내역 입력" 화면으로 돌아간다. 이 창이 FIS에서 새 탭으로 열린
+// 경우엔 탭을 닫아서 원래 화면으로 자연스럽게 복귀시키고, 그게 안 되는 환경이면 안내만 띄운다.
+document.getElementById('backToFisBtn').onclick = async function(){
+  saveNow(false);
+  toast('동기화 중...');
+  var r = await syncAllPending();
+  toast('동기화 완료(' + (r.ok + r.alreadyDone) + '건) — 원래 화면으로 돌아갑니다');
+  setTimeout(function(){
+    window.close();
+    setTimeout(function(){ toast('이 창을 닫고 혁신소방_현장테스트 탭으로 돌아가주세요'); }, 400);
+  }, 600);
+};
 document.getElementById('startDateInput').value = state.date;
 renderStartChips();
 if(restored && state.inspector){
@@ -1251,37 +1397,194 @@ document.getElementById('startResetLink').onclick = function(){
   }
 };
 
-// ================= 내보내기 =================
-function csvEscape(v){
-  v = (v===undefined||v===null) ? '' : String(v);
-  if(/[",\n]/.test(v)) v = '"'+v.replace(/"/g,'""')+'"';
-  return v;
-}
-function buildCsvBlob(){
+// ================= 내보내기 (정식 엑셀 서식) =================
+async function buildOfficialXlsxBlob(){
   var defects = activeEntries().filter(function(e){return e.status==='defect';});
-  var rows = [['소방시설','설비명','위치','시정보완사항','보완대책','비고','점검자','점검일']];
+  var wb = new ExcelJS.Workbook();
+  wb.creator = state.inspector || '혁신소방';
+  var sheet = wb.addWorksheet('불량내역');
+  sheet.columns = [
+    { header:'소방시설', key:'category', width:12 },
+    { header:'설비명', key:'equip', width:20 },
+    { header:'위치', key:'loc', width:16 },
+    { header:'시정보완사항', key:'content', width:44 },
+    { header:'보완대책', key:'action', width:12 },
+    { header:'비고', key:'memo', width:10 },
+    { header:'점검자', key:'inspector', width:12 },
+    { header:'점검일', key:'date', width:12 }
+  ];
+  var headerRow = sheet.getRow(1);
+  headerRow.eachCell(function(cell){
+    cell.font = { bold:true, color:{argb:'FFFFFFFF'} };
+    cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF1F6FEB'} };
+    cell.alignment = { vertical:'middle', horizontal:'center' };
+    cell.border = { top:{style:'thin'}, bottom:{style:'thin'}, left:{style:'thin'}, right:{style:'thin'} };
+  });
+  headerRow.height = 22;
+
   defects.forEach(function(e){
     var loc = e.dong + (e.lineGroup ? ' '+e.lineGroup+'라인' : '');
-    var content = (e.locationDetail ? e.locationDetail+' ' : '') + (e.defectContent||'');
-    rows.push([ e.category||'', e.equip||'', loc, content, e.action||'', e.code||e.memo||'', e.inspector||state.inspector, e.date||state.date ]);
+    // [버그수정] 세부위치(locationDetail)가 불량내용 앞에 이미 들어가 있는 경우(점검항목 칩을 탭하면
+    // 자동으로 붙음) export에서 또 붙이면 "위치 위치 내용"처럼 중복되므로, 이미 포함돼 있으면 다시 붙이지 않는다.
+    var raw = e.defectContent || '';
+    var content = (e.locationDetail && raw.indexOf(e.locationDetail) === 0) ? raw : ((e.locationDetail ? e.locationDetail+' ' : '') + raw);
+    var row = sheet.addRow({
+      category: e.category||'', equip: e.equip||'', loc: loc, content: content,
+      action: e.action||'', memo: e.code||e.memo||'',
+      inspector: e.inspector||state.inspector, date: e.date||state.date
+    });
+    row.eachCell(function(cell){
+      cell.border = { top:{style:'thin'}, bottom:{style:'thin'}, left:{style:'thin'}, right:{style:'thin'} };
+      cell.alignment = { vertical:'middle', wrapText:true };
+    });
+    // [요청사항] 시정보완사항이 "?"로 끝나면(현장에서 확실치 않아 표시해둔 항목) 노란색으로 강조
+    if(/\?\s*$/.test(content)){
+      row.getCell('content').fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFFFF176'} };
+    }
   });
-  var csv = rows.map(function(r){ return r.map(csvEscape).join(','); }).join('\r\n');
-  return new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
+  sheet.views = [{ state:'frozen', ySplit:1 }];
+
+  var buf = await wb.xlsx.writeBuffer();
+  return new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
-document.getElementById('exportBtn').onclick = function(){
+// ================= PPT 완료현황 리포트 (실제 점검 데이터 기반) =================
+function unitDoneStatus(dong, lineNum, floor){
+  var unit = String(floor) + pad2(lineNum);
+  var list = activeEntries().filter(function(e){ return e.dong===dong && e.zone==='unit' && e.unit===unit; });
+  if(!list.length) return false;
+  return list.some(function(e){ return e.status==='ok' || e.status==='defect'; });
+}
+function buildDongGridData(dong){
+  var lines = [];
+  (B().lineGroups[dong]||[]).forEach(function(lg){
+    lg.split('~').map(function(x){return parseInt(x,10);}).forEach(function(ln){ if(lines.indexOf(ln)===-1) lines.push(ln); });
+  });
+  lines.sort(function(a,b){return a-b;});
+  var maxF = B().maxFloor[dong] || 20;
+  var total = 0, done = 0;
+  var cells = []; // {line, floor, done, exists}
+  for(var f=maxF; f>=1; f--){
+    lines.forEach(function(ln){
+      var top = lineMax(dong, ln);
+      var exists = f <= top;
+      if(exists){ total++; var d = unitDoneStatus(dong, ln, f); if(d) done++; cells.push({line:ln, floor:f, done:d, exists:true}); }
+      else cells.push({line:ln, floor:f, done:false, exists:false});
+    });
+  }
+  return { lines: lines, maxF: maxF, total: total, done: done };
+}
+document.getElementById('pptReportBtn').onclick = async function(){
+  if(typeof PptxGenJS === 'undefined'){
+    toast('PPT 기능을 불러오지 못했습니다. 인터넷 연결을 확인하고 다시 시도해주세요.');
+    return;
+  }
+  var dongs = B().dongs || [];
+  if(!dongs.length){ toast('이 대상물엔 동이 없어 리포트를 만들 수 없습니다'); return; }
+  toast('PPT 만드는 중...');
+
+  var COLd='2E9E5B', COLt='D9DCE1', COLnavy='1E2761', COLice='CADCFC', COLwhite='FFFFFF', COLtext='1B1E24', COLmuted='6B7280';
+  var pres = new PptxGenJS();
+  pres.layout = 'LAYOUT_WIDE';
+
+  var grids = dongs.map(buildDongGridData);
+  var totalUnits = grids.reduce(function(s,g){return s+g.total;},0);
+  var totalDone = grids.reduce(function(s,g){return s+g.done;},0);
+  var pct = totalUnits ? Math.round(totalDone/totalUnits*100) : 0;
+
+  // ---- 표지/요약 슬라이드 ----
+  var s1 = pres.addSlide();
+  s1.background = { color: COLnavy };
+  s1.addText(state.currentBuilding, { x:0.6, y:0.55, w:9, h:0.6, fontSize:16, color:COLice, fontFace:'Calibri', bold:true });
+  s1.addText('세대별 점검완료 현황', { x:0.6, y:1.0, w:11, h:1.0, fontSize:40, color:COLwhite, fontFace:'Cambria', bold:true });
+  s1.addText(state.date + ' 기준 · 점검자: ' + (state.inspector||''), { x:0.6, y:1.75, w:11, h:0.4, fontSize:13, color:COLice, fontFace:'Calibri' });
+  var stats = [
+    { label:'전체 세대수', value:String(totalUnits) },
+    { label:'점검 완료', value:String(totalDone) },
+    { label:'미점검', value:String(totalUnits-totalDone) },
+    { label:'진행률', value: pct+'%' }
+  ];
+  var boxW=2.7, gap=0.35, startX=0.6, y=2.7;
+  stats.forEach(function(st,i){
+    var x = startX + i*(boxW+gap);
+    s1.addShape('roundRect', { x:x, y:y, w:boxW, h:1.9, fill:{color:'2A3576'}, line:{type:'none'}, rectRadius:0.12 });
+    s1.addText(st.value, { x:x, y:y+0.18, w:boxW, h:1.0, align:'center', fontSize:34, bold:true, color:COLwhite, fontFace:'Calibri' });
+    s1.addText(st.label, { x:x, y:y+1.15, w:boxW, h:0.5, align:'center', fontSize:13, color:COLice, fontFace:'Calibri' });
+  });
+  var legend = [['점검완료', COLd], ['미점검(부재중 포함)', COLt]];
+  var lx=0.6, ly=5.05;
+  legend.forEach(function(pair){
+    s1.addShape('rect', { x:lx, y:ly, w:0.28, h:0.28, fill:{color:pair[1]}, line:{type:'none'} });
+    s1.addText(pair[0], { x:lx+0.38, y:ly-0.06, w:2.9, h:0.4, fontSize:12.5, color:COLwhite, fontFace:'Calibri' });
+    lx += 3.4;
+  });
+  s1.addText('다음 페이지: 동별 세대 점검현황 그리드', { x:0.6, y:6.75, w:11, h:0.4, fontSize:11.5, color:COLice, fontFace:'Calibri' });
+
+  // ---- 그리드 슬라이드 (동 2개씩) ----
+  for(var i=0; i<dongs.length; i+=2){
+    var pair = dongs.slice(i, i+2);
+    var s = pres.addSlide();
+    s.background = { color: COLwhite };
+    s.addText('동별 세대 점검현황', { x:0.5, y:0.35, w:8, h:0.55, fontSize:24, bold:true, color:COLtext, fontFace:'Cambria' });
+    s.addText('층(행) × 라인(열) · 색상 = 점검상태', { x:0.5, y:0.85, w:8, h:0.35, fontSize:11.5, color:COLmuted, fontFace:'Calibri' });
+    pair.forEach(function(dong, idx){
+      var xOrigin = 0.5 + idx*6.5;
+      var g = grids[dongs.indexOf(dong)];
+      var cellW=0.36, cellH=0.235, gridX=xOrigin+0.55, gridY=1.5;
+      s.addText(dong, { x:xOrigin, y:1.15, w:5.9, h:0.32, fontSize:14, bold:true, color:COLtext, fontFace:'Calibri' });
+      g.lines.forEach(function(ln, ci){
+        s.addText(String(ln), { x:gridX+ci*cellW, y:gridY-0.24, w:cellW, h:0.22, align:'center', fontSize:7, color:COLmuted, fontFace:'Calibri' });
+      });
+      for(var f=g.maxF, ri=0; f>=1; f--, ri++){
+        var yy = gridY + ri*cellH;
+        if(f===g.maxF || f===1 || f%5===0){
+          s.addText(String(f), { x:xOrigin, y:yy, w:0.5, h:cellH, align:'right', fontSize:7, color:COLmuted, fontFace:'Calibri' });
+        }
+        g.lines.forEach(function(ln, ci){
+          var top = lineMax(dong, ln);
+          if(f > top) return;
+          var xx = gridX + ci*cellW;
+          var done = unitDoneStatus(dong, ln, f);
+          s.addShape('rect', { x:xx, y:yy, w:cellW-0.02, h:cellH-0.02, fill:{color: done?COLd:COLt}, line:{color:'FFFFFF', width:0.5} });
+        });
+      }
+    });
+    var legend2 = [['점검완료', COLd], ['미점검(부재중 포함)', COLt]];
+    var lx2=0.5, ly2=7.05;
+    legend2.forEach(function(pair2){
+      s.addShape('rect', { x:lx2, y:ly2, w:0.18, h:0.18, fill:{color:pair2[1]}, line:{type:'none'} });
+      s.addText(pair2[0], { x:lx2+0.24, y:ly2-0.05, w:1.7, h:0.3, fontSize:10, color:COLtext, fontFace:'Calibri' });
+      lx2 += 2.0;
+    });
+  }
+
+  try{
+    await pres.writeFile({ fileName: state.currentBuilding+'_세대별점검완료현황_'+state.date+'.pptx' });
+    toast('PPT를 만들었습니다 (다운로드 폴더 확인)');
+  }catch(err){
+    toast('PPT 생성 중 오류가 발생했습니다: ' + err.message);
+  }
+};
+
+document.getElementById('exportBtn').onclick = async function(){
   var defects = activeEntries().filter(function(e){return e.status==='defect';});
   if(!defects.length){ toast('내보낼 불량 항목이 없습니다'); return; }
-  downloadBlob(buildCsvBlob(), state.currentBuilding+'_불량내역_'+state.date+'.csv');
-  toast('CSV로 내보냈습니다 (다운로드 폴더 확인)');
+  if(typeof ExcelJS === 'undefined'){ toast('엑셀 기능을 불러오지 못했습니다. 인터넷 연결을 확인하고 다시 시도해주세요.'); return; }
+  toast('정식 엑셀 만드는 중...');
+  try{
+    var blob = await buildOfficialXlsxBlob();
+    downloadBlob(blob, state.currentBuilding+'_불량내역_'+state.date+'.xlsx');
+    toast('정식 엑셀로 내보냈습니다 (다운로드 폴더 확인)');
+  }catch(err){ toast('엑셀 생성 중 오류: '+err.message); }
 };
 
 document.getElementById('shareBtn').onclick = async function(){
   var defects = activeEntries().filter(function(e){return e.status==='defect';});
   if(!defects.length){ toast('공유할 불량 항목이 없습니다'); return; }
-  var blob = buildCsvBlob();
-  var filename = state.currentBuilding+'_불량내역_'+state.date+'.csv';
+  if(typeof ExcelJS === 'undefined'){ toast('엑셀 기능을 불러오지 못했습니다. 인터넷 연결을 확인하고 다시 시도해주세요.'); return; }
+  var blob = await buildOfficialXlsxBlob();
+  var filename = state.currentBuilding+'_불량내역_'+state.date+'.xlsx';
   try{
-    var file = new File([blob], filename, {type:'text/csv'});
+    var file = new File([blob], filename, {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     if(navigator.canShare && navigator.canShare({files:[file]})){
       await navigator.share({ files:[file], title: state.currentBuilding+' 불량내역', text: state.date+' '+state.currentBuilding+' 불량내역 ('+defects.length+'건)' });
       return;
@@ -1305,7 +1608,7 @@ document.getElementById('jsonImportInput').onchange = function(){
     try{
       var parsed = JSON.parse(e.target.result);
       if(parsed && parsed.state){
-        state = parsed.state;
+        state = migrateStateShape(parsed.state);
         state.dirty = false;
         saveNow(false);
         toast('백업을 불러왔습니다');
@@ -1332,6 +1635,8 @@ function esc(s){
 }
 
 render();
+updateSyncBadge();
+callAppsScript({ action:'list', prefix:'', shared:true }); // [V08] 연결 상태 배지 초기화용 ping
 })();
 </script>
 </body>
