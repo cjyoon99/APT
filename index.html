@@ -201,6 +201,8 @@
         <input type="text" id="dongAddInput" placeholder="새 동 이름 (예: 103동)" style="flex:1;">
         <button class="smallghost" id="dongAddBtn" style="border:1px solid var(--accent);border-radius:8px;padding:8px 10px;background:#fff;">동 추가</button>
       </div>
+      <button class="smallghost" id="resetBuildingStructBtn" style="border:1px solid var(--danger);color:var(--danger);border-radius:8px;padding:8px 10px;background:#fff;margin-top:8px;width:100%;">🔄 이 대상물 구조를 기본값으로 재설정</button>
+      <div class="hint" style="margin-top:4px;">동/라인/층수 구성만 원래 기본값으로 되돌립니다 — 이미 입력한 불량내역·점검기록은 그대로 유지됩니다. github.io처럼 다른 곳에 저장된 옛날 구조가 꼬여서 라인이 일부만 보일 때 이걸로 바로잡을 수 있습니다.</div>
     </div>
 
     <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px;">
@@ -1218,6 +1220,26 @@ document.getElementById('dongAddBtn').onclick = function(){
   markDirty();
   renderDongPickers(); renderMaxFloorList(); renderCurrentLinesHint(); renderLineMaxEditor();
   toast(name+' 추가되었습니다. 이제 라인을 추가해주세요.');
+};
+// [V08] 다른 브라우저/기기(github.io 등)에 예전에 저장돼있던 꼬인 구조(예: 라인이 일부만 있는 상태)를
+// 원래 기본값으로 되돌린다. 불량내역(state.entries)은 절대 건드리지 않고 dongs/lineGroups/maxFloor/
+// lineMaxFloor/commonPlaces 구조만 다시 채운다. 이 대상물명에 대한 기본값이 없으면(직접 추가한
+// 아파트 등) 되돌릴 원본이 없다는 뜻이므로 안내만 하고 아무것도 지우지 않는다.
+document.getElementById('resetBuildingStructBtn').onclick = function(){
+  var name = state.currentBuilding;
+  var def = DEFAULT_BUILDINGS[name];
+  if(!def){
+    toast('"'+name+'"은(는) 기본값으로 등록된 구조가 없습니다 (직접 추가한 아파트로 보입니다). 라인 추가/동 추가로 직접 구성해주세요.');
+    return;
+  }
+  if(!confirm('"'+name+'" 의 동/라인/층수 구성을 원래 기본값으로 되돌립니다.\n이미 입력한 불량내역·점검기록은 지워지지 않습니다.\n계속할까요?')) return;
+  state.buildings[name] = JSON.parse(JSON.stringify(def));
+  markDirty();
+  saveNow(false);
+  renderDongPickers(); renderMaxFloorList(); renderCurrentLinesHint(); renderLineMaxEditor(); renderBuildingChips();
+  nav = { view:'home', dong:null, lineGroup:null, floor:null };
+  render();
+  toast('구조를 기본값으로 되돌렸습니다');
 };
 function renderMaxFloorList(){
   var wrap = document.getElementById('maxFloorList');
